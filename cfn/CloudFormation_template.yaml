@@ -8,9 +8,9 @@ Parameters:
   PinpointProjectId:
     Type: String
     Description: Amazon Pinpoint Project ID
-  OriginationNumber:
+  OriginatingIdentity:
     Type: String
-    Description: Type the mobile number from which you will send & receive SMS in E.164 format
+    Description: Type the mobile number from which you Amazon Pinpoint will send & receive SMS in E.164 format
   LambdaCodeS3BucketName:
     Type: String
     Description: The S3 bucket where you have uploaded the AWS Lambda fucntion code
