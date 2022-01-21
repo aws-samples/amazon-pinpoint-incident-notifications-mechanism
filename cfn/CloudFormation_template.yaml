@@ -10,7 +10,7 @@ Parameters:
     Description: Amazon Pinpoint Project ID
   OriginatingIdentity:
     Type: String
-    Description: Type the mobile number from which you Amazon Pinpoint will send & receive SMS in E.164 format
+    Description: The mobile number from which you Amazon Pinpoint will send & receive SMS in E.164 format
   LambdaCodeS3BucketName:
     Type: String
     Description: The S3 bucket where you have uploaded the AWS Lambda fucntion code
@@ -58,7 +58,7 @@ Resources:
       Environment:
         Variables:
           APPLICATION_ID: !Ref PinpointProjectId
-          ORIGINATION_NUMBER: !Ref OriginationNumber
+          ORIGINATION_NUMBER: !Ref OriginatingIdentity
           DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]]
       ReservedConcurrentExecutions: 3
       Code:
@@ -80,7 +80,7 @@ Resources:
       Environment:
         Variables:
           APPLICATION_ID: !Ref PinpointProjectId
-          ORIGINATION_NUMBER: !Ref OriginationNumber
+          ORIGINATION_NUMBER: !Ref OriginatingIdentity
           DYNAMODB_INCIDENTINFO: !Select [1, !Split ['/', !GetAtt IncidentInfoDynamoDB.Arn]] 
           DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]]
       ReservedConcurrentExecutions: 3
@@ -103,7 +103,7 @@ Resources:
       Environment:
         Variables:
           APPLICATION_ID: !Ref PinpointProjectId
-          ORIGINATION_NUMBER: !Ref OriginationNumber
+          ORIGINATION_NUMBER: !Ref OriginatingIdentity
           DYNAMODB_INCIDENTINFO: !Select [1, !Split ['/', !GetAtt IncidentInfoDynamoDB.Arn]] 
           DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]] 
       ReservedConcurrentExecutions: 3
@@ -126,7 +126,7 @@ Resources:
       Environment:
         Variables:
           APPLICATION_ID: !Ref PinpointProjectId
-          ORIGINATION_NUMBER: !Ref OriginationNumber
+          ORIGINATION_NUMBER: !Ref OriginatingIdentity
           STATEMACHINE_ARN: !GetAtt StateMachineIncidentManagement.Arn
           DYNAMODB_INCIDENTINFO: !Select [1, !Split ['/', !GetAtt IncidentInfoDynamoDB.Arn]] 
           DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]] 
