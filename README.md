@@ -97,10 +97,10 @@ On the **Create item** page choose **JSON**, copy and paste the JSON below into 
 
 Incident fields description:
   
-  •	**incident_id:** Needs to be unique.
-  •	**incident_stat:** This is used from the application to store the incident status. When creating the incident, this value should always be not_acknowledged.
-  •	**double_escalation:** This is used from the application flag if the recipient tries to escalate an incident that is already escalated. When creating the incident, this value should always be **not_acknowledged**.
-  •	**description:** You can type a description that best describes the incident. Be aware that depending the number of characters the SMS parts will increase. For more information on SMS character limits visit this [page](https://docs.aws.amazon.com/pinpoint/latest/userguide/channels-sms-limitations-characters.html). 
+  - **incident_id:** Needs to be unique.
+  - **incident_stat:** This is used from the application to store the incident status. When creating the incident, this value should always be not_acknowledged.
+  - **double_escalation:** This is used from the application flag if the recipient tries to escalate an incident that is already escalated. When creating the incident, this value should always be **not_acknowledged**.
+  **description:** You can type a description that best describes the incident. Be aware that depending the number of characters the SMS parts will increase. For more information on SMS character limits visit this [page](https://docs.aws.amazon.com/pinpoint/latest/userguide/channels-sms-limitations-characters.html). 
   •	**url:** You can add a URL that resources can access to resolve the issue. If this field is not pertinent to your use case then type **no url**.
   •	**first_contact:** This should contain the mobile number in E.164 format for the first resource.
   •	**second_contact:** This should contain the mobile number in E.164 format for the second resource. The second resource will be contacted only if the first one does not acknowledge the SMS or declines the incident.
