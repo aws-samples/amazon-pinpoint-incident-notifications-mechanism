@@ -1,0 +1,637 @@
+# author: pavlosik@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Incident notification mechanism using Amazon Pinpoint two-way SMS feature.
+
+Parameters:
+
+  PinpointProjectId:
+    Type: String
+    Description: Amazon Pinpoint Project ID
+  OriginationNumber:
+    Type: String
+    Description: Type the mobile number from which you will send & receive SMS in E.164 format
+  LambdaCodeS3BucketName:
+    Type: String
+    Description: The S3 bucket where you have uploaded the AWS Lambda fucntion code
+  WaitingBetweenSteps:
+    Type: Number
+    Description: Number of seconds to wait between steps. Add a value greater than 30 seconds.
+
+Resources:
+
+#### AWS LAMBDAS
+##################################
+
+  LambdaIncidentProcessor:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Not public facing.
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaIncidentProcessorRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Environment:
+        Variables:
+          STATEMACHINE_ARN: !GetAtt StateMachineIncidentManagement.Arn
+      ReservedConcurrentExecutions: 3
+      Code:
+          S3Bucket: !Ref LambdaCodeS3BucketName
+          S3Key: "LambdaIncidentProcessor.zip"
+  
+  LambdaFirstSMS:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Not public facing.
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaFirstSMSRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Environment:
+        Variables:
+          APPLICATION_ID: !Ref PinpointProjectId
+          ORIGINATION_NUMBER: !Ref OriginationNumber
+          DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]]
+      ReservedConcurrentExecutions: 3
+      Code:
+          S3Bucket: !Ref LambdaCodeS3BucketName
+          S3Key: "LambdaFirstSMS.zip"
+    
+  LambdaReminderSMS:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Not public facing.
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaReminderSMSRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Environment:
+        Variables:
+          APPLICATION_ID: !Ref PinpointProjectId
+          ORIGINATION_NUMBER: !Ref OriginationNumber
+          DYNAMODB_INCIDENTINFO: !Select [1, !Split ['/', !GetAtt IncidentInfoDynamoDB.Arn]] 
+          DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]]
+      ReservedConcurrentExecutions: 3
+      Code:
+          S3Bucket: !Ref LambdaCodeS3BucketName
+          S3Key: "LambdaReminderSMS.zip"
+
+  LambdaStateReview:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Not public facing.
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaStateReviewRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Environment:
+        Variables:
+          APPLICATION_ID: !Ref PinpointProjectId
+          ORIGINATION_NUMBER: !Ref OriginationNumber
+          DYNAMODB_INCIDENTINFO: !Select [1, !Split ['/', !GetAtt IncidentInfoDynamoDB.Arn]] 
+          DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]] 
+      ReservedConcurrentExecutions: 3
+      Code:
+          S3Bucket: !Ref LambdaCodeS3BucketName
+          S3Key: "LambdaStateReview.zip"
+    
+  LambdaTwoWaySMS:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Not public facing.
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaTwoWaySMSRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Environment:
+        Variables:
+          APPLICATION_ID: !Ref PinpointProjectId
+          ORIGINATION_NUMBER: !Ref OriginationNumber
+          STATEMACHINE_ARN: !GetAtt StateMachineIncidentManagement.Arn
+          DYNAMODB_INCIDENTINFO: !Select [1, !Split ['/', !GetAtt IncidentInfoDynamoDB.Arn]] 
+          DYNAMODB_MESSAGEID: !Select [1, !Split ['/', !GetAtt MessageIDDynamoDB.Arn]] 
+      ReservedConcurrentExecutions: 3
+      Code:
+          S3Bucket: !Ref LambdaCodeS3BucketName
+          S3Key: "LambdaTwoWaySMS.zip"
+
+#### STATE MACHINE
+##################################
+
+  StateMachineIncidentManagement:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StateMachineRole.Arn
+      DefinitionString:
+        !Sub
+          - |-
+            {
+              "StartAt": "Send_First_SMS",
+              "States": {
+                "Send_First_SMS": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "OutputPath": "$.Payload",
+                  "Parameters": {
+                    "Payload.$": "$",
+                    "FunctionName": "${LambdaFirstSMSArn}"
+                  },
+                  "Next": "Assess if escalation on escalation"
+                },
+                "Assess if escalation on escalation": {
+                  "Type": "Choice",
+                  "Choices": [
+                    {
+                      "Variable": "$.skip_to_end",
+                      "StringEquals": "yes",
+                      "Next": "Incident_State_Review"
+                    }
+                  ],
+                  "Default": "WaitForReminder"
+                },
+                "WaitForReminder": {
+                  "Type": "Wait",
+                  "Seconds": ${WaitingBetweenSteps},
+                  "Next": "Reminder_SMS"
+                },
+                "Reminder_SMS": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "OutputPath": "$.Payload",
+                  "Parameters": {
+                    "Payload.$": "$",
+                    "FunctionName": "${LambdaReminderSMSArn}"
+                  },
+                  "Next": "Assess if incident is acknowledged"
+                },
+                "Assess if incident is acknowledged": {
+                  "Type": "Choice",
+                  "Choices": [
+                    {
+                      "Or": [
+                        {
+                          "Variable": "$.incident_stat",
+                          "StringEquals": "acknowledged"
+                        },
+                        {
+                          "Variable": "$.double_escalation",
+                          "StringEquals": "yes"
+                        }
+                      ],
+                      "Next": "Pass"
+                    }
+                  ],
+                  "Default": "WaitForReview"
+                },
+                "WaitForReview": {
+                  "Type": "Wait",
+                  "Seconds": ${WaitingBetweenSteps},
+                  "Next": "Incident_State_Review"
+                },
+                "Incident_State_Review": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "OutputPath": "$.Payload",
+                  "Parameters": {
+                    "Payload.$": "$",
+                    "FunctionName": "${LambdaStateReviewArn}"
+                  },
+                  "Next": "Assess if the incident requires auto-escalation"
+                },
+                "Assess if the incident requires auto-escalation": {
+                  "Type": "Choice",
+                  "Choices": [
+                    {
+                      "Variable": "$.auto_escalation",
+                      "StringEquals": "yes",
+                      "Next": "Send_First_SMS"
+                    }
+                  ],
+                  "Default": "Pass"
+                },
+                "Pass": {
+                  "Type": "Pass",
+                  "End": true
+                }
+              },
+              "Comment": "2 way SMS incident management"
+            }
+          - {WaitingBetweenSteps: !Ref WaitingBetweenSteps, LambdaFirstSMSArn: !GetAtt LambdaFirstSMS.Arn, LambdaReminderSMSArn: !GetAtt LambdaReminderSMS.Arn, LambdaStateReviewArn: !GetAtt LambdaStateReview.Arn }
+
+#### IAM ROLES
+##################################
+
+  LambdaIncidentProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "states:StartExecution"
+                Resource:
+                  - !GetAtt StateMachineIncidentManagement.Arn
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetRecords"
+                  - "dynamodb:GetShardIterator"
+                  - "dynamodb:DescribeStream"
+                  - "dynamodb:ListShards"
+                  - "dynamodb:ListStreams"
+                Resource:
+                  - !GetAtt IncidentInfoDynamoDB.StreamArn
+
+  LambdaReminderSMSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "mobiletargeting:SendMessages"
+                Resource:
+                  - !Sub "arn:aws:mobiletargeting:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                Resource:
+                  - !GetAtt IncidentInfoDynamoDB.Arn
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                  - "dynamodb:DeleteItem"
+                Resource:
+                  - !GetAtt MessageIDDynamoDB.Arn
+
+  LambdaFirstSMSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "mobiletargeting:SendMessages"
+                Resource:
+                  - !Sub "arn:aws:mobiletargeting:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                Resource:
+                  - !GetAtt IncidentInfoDynamoDB.Arn
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                  - "dynamodb:DeleteItem"
+                Resource:
+                  - !GetAtt MessageIDDynamoDB.Arn
+  
+  LambdaStateReviewRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "mobiletargeting:SendMessages"
+                Resource:
+                  - !Sub "arn:aws:mobiletargeting:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                  - "dynamodb:DeleteItem"
+                Resource:
+                  - !GetAtt MessageIDDynamoDB.Arn
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                Resource:
+                  - !GetAtt IncidentInfoDynamoDB.Arn
+  
+  LambdaTwoWaySMSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "mobiletargeting:SendMessages"
+                Resource:
+                  - !Sub "arn:aws:mobiletargeting:${AWS::Region}:${AWS::AccountId}:*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                  - "dynamodb:DeleteItem"
+                Resource:
+                  - !GetAtt MessageIDDynamoDB.Arn
+              -
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:GetRecords"
+                Resource:
+                  - !GetAtt IncidentInfoDynamoDB.Arn
+              -
+                Effect: "Allow"
+                Action:
+                  - "states:StartExecution"
+                Resource:
+                  - !GetAtt StateMachineIncidentManagement.Arn
+
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W76
+            reason: Complex Role that is used for StateMachine to invoke many other lambdas
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "states.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt LambdaFirstSMS.Arn
+                  - !GetAtt LambdaReminderSMS.Arn
+                  - !GetAtt LambdaStateReview.Arn
+
+#### SNS TOPIC & ROLE
+##################################
+
+  TwoWaySMSSNSTopic:
+    Type: AWS::SNS::Topic
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W47
+            reason: Not required.
+    Properties:
+      DisplayName: "2waySMSPinpoint"
+      Subscription:
+        -
+          Endpoint: !GetAtt LambdaTwoWaySMS.Arn
+          Protocol: "lambda"
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      Principal: "sns.amazonaws.com"
+      SourceArn: !Ref TwoWaySMSSNSTopic
+      FunctionName: !GetAtt LambdaTwoWaySMS.Arn
+
+  SNSRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W76
+            reason: Complex Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt LambdaTwoWaySMS.Arn
+
+
+#### DYNAMO DB TABLES
+##################################
+
+  MessageIDDynamoDB:
+    Type: AWS::DynamoDB::Table
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties: 
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: 
+      - AttributeName: message_id
+        AttributeType: S
+      KeySchema: 
+      - AttributeName: message_id
+        KeyType: HASH
+      PointInTimeRecoverySpecification:  
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  IncidentInfoDynamoDB:
+    Type: AWS::DynamoDB::Table
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties: 
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: 
+      - AttributeName: incident_id
+        AttributeType: S
+      KeySchema: 
+      - AttributeName: incident_id
+        KeyType: HASH
+      PointInTimeRecoverySpecification:  
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+
+  DynamoDBLambdaTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties: 
+      BatchSize: 1
+      Enabled: True
+      EventSourceArn: !GetAtt IncidentInfoDynamoDB.StreamArn
+      FunctionName: !GetAtt LambdaIncidentProcessor.Arn
+      StartingPosition: TRIM_HORIZON
