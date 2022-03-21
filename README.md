@@ -4,7 +4,7 @@
 
 This repository contains a solution on how you can automate the delivery of incident notifications. It utilises [Amazon Pinpoint SMS channel](https://docs.aws.amazon.com/pinpoint/latest/userguide/channels-sms.html) to contact the designated resources who might not have access to the internet. Furthermore, the recipient of the SMS is able to reply with an acknowledgement. [AWS Step Functions](https://aws.amazon.com/step-functions/) orchestrates the user journey using [AWS Lambda functions](https://aws.amazon.com/lambda/) to evaluate the recipients’ response and trigger the next best action. The solution can be deployed with [AWS CloudFormation](https://aws.amazon.com/cloudformation/).
 
-This repository is part of a blog post **TO DO** where you can find step-by-step instructions.
+This repository is part of the blog post [Incident notification mechanism using Amazon Pinpoint two-way SMS](https://aws.amazon.com/blogs/messaging-and-targeting/incident-notification-mechanism-using-amazon-pinpoint-two-way-sms/), where you can find step-by-step instructions.
 
 #### Architecture
 
