@@ -543,6 +543,7 @@ Resources:
             reason: Not required.
     Properties:
       DisplayName: "2waySMSPinpoint"
+      KmsMasterKeyId: alias/aws/sns
       Subscription:
         -
           Endpoint: !GetAtt LambdaTwoWaySMS.Arn
